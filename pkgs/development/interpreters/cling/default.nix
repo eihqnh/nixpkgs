@@ -3,12 +3,11 @@
 , git
 , lib
 , libffi
-, llvmPackages_13
+, llvmPackages_18
 , makeWrapper
 , ncurses
 , python3
 , zlib
-
 # *NOT* from LLVM 9!
 # The compiler used to compile Cling may affect the runtime include and lib
 # directories it expects to be run with. Cling builds against (a fork of) Clang,
@@ -26,7 +25,7 @@
 
 # Build with libc++ (LLVM) rather than stdlibc++ (GCC).
 # This is experimental and not all features work.
-, useLLVMLibcxx ? clangStdenv.isDarwin
+, useLLVMLibcxx ? clangStdenv.hostPlatform.isDarwin
 }:
 
 let
@@ -36,50 +35,57 @@ let
   clangSrc = fetchFromGitHub {
     owner = "root-project";
     repo = "llvm-project";
-    # cling-llvm13 branch
-    rev = "3610201fbe0352a63efb5cb45f4ea4987702c735";
-    sha256 = "sha256-Cb7BvV7yobG+mkaYe7zD2KcnPvm8/vmVATNWssklXyk=";
-    sparseCheckout = ["clang"];
+    # cling-llvm18 branch
+    rev = "7a9549505de385bd14dd3e15b8aa037cfdc960cf";
+    sha256 = "sha256-w6Fjk1mwmAGSw420gFoeka98sx5l4hV43LfVdz2nqU4=";
+    sparseCheckout = ["clang" "cmake"];
   };
 
   unwrapped = stdenv.mkDerivation rec {
     pname = "cling-unwrapped";
-    version = "1.0";
+    version = "1.1";
 
-    src = "${clangSrc}/clang";
+    src = "${clangSrc}";
 
     clingSrc = fetchFromGitHub {
       owner = "root-project";
       repo = "cling";
-      rev = "v${version}";
-      sha256 = "sha256-Ye8EINzt+dyNvUIRydACXzb/xEPLm0YSkz08Xxw3xp4=";
+      rev = "refs/tags/v${version}";
+      sha256="sha256-MBkHU4B1qPTmfLjBh0Kvt58A+3s9TfcknHXteyVe8I0=";
     };
 
     prePatch = ''
-      echo "add_llvm_external_project(cling)" >> tools/CMakeLists.txt
+      echo "add_llvm_external_project(cling)" >> clang/tools/CMakeLists.txt
 
-      cp -r $clingSrc tools/cling
-      chmod -R a+w tools/cling
+      cp -r $clingSrc clang/tools/cling
+      chmod -R a+w clang/tools/cling
+
+    '';
+    preConfigure = ''
+      #FIXME
+      cd clang
     '';
 
     patches = [
-      ./no-clang-cpp.patch
+       ./no-clang-cpp.patch
     ];
 
-    nativeBuildInputs = [ python3 git cmake ];
-    buildInputs = [ libffi ncurses zlib ];
+    nativeBuildInputs = [ python3 git cmake  ];
+    buildInputs = [ libffi ncurses zlib];
 
     strictDeps = true;
 
     cmakeFlags = [
-      "-DLLVM_BINARY_DIR=${llvmPackages_13.llvm.out}"
-      "-DLLVM_CONFIG=${llvmPackages_13.llvm.dev}/bin/llvm-config"
-      "-DLLVM_LIBRARY_DIR=${llvmPackages_13.llvm.lib}/lib"
-      "-DLLVM_MAIN_INCLUDE_DIR=${llvmPackages_13.llvm.dev}/include"
-      "-DLLVM_TABLEGEN_EXE=${llvmPackages_13.llvm.out}/bin/llvm-tblgen"
-      "-DLLVM_TOOLS_BINARY_DIR=${llvmPackages_13.llvm.out}/bin"
+      "-DLLVM_DIR=${llvmPackages_18.llvm.dev}/lib/cmake/llvm" #FIXME
+      "-DLLVM_BINARY_DIR=${llvmPackages_18.llvm.out}"
+      "-DLLVM_CONFIG=${llvmPackages_18.llvm.dev}/bin/llvm-config"
+      "-DLLVM_LIBRARY_DIR=${llvmPackages_18.llvm.lib}/lib"
+      "-DLLVM_MAIN_INCLUDE_DIR=${llvmPackages_18.llvm.dev}/include"
+      "-DLLVM_TABLEGEN_EXE=${llvmPackages_18.llvm.out}/bin/llvm-tblgen"
+      "-DLLVM_TOOLS_BINARY_DIR=${llvmPackages_18.llvm.out}/bin"
       "-DLLVM_BUILD_TOOLS=Off"
       "-DLLVM_TOOL_CLING_BUILD=ON"
+      "-DLLVM_INCLUDE_TESTS=OFF"
 
       "-DLLVM_TARGETS_TO_BUILD=host;NVPTX"
       "-DLLVM_ENABLE_RTTI=ON"
@@ -97,9 +103,9 @@ let
 
     CPPFLAGS = if useLLVMLibcxx then [ "-stdlib=libc++" ] else [];
 
-    postInstall = lib.optionalString (!stdenv.isDarwin) ''
+    postInstall = lib.optionalString (!stdenv.hostPlatform.isDarwin) ''
       mkdir -p $out/share/Jupyter
-      cp -r /build/clang/tools/cling/tools/Jupyter/kernel $out/share/Jupyter
+      #cp -r /build/clang/tools/cling/tools/Jupyter/kernel $out/share/Jupyter
     '';
 
     dontStrip = debug;
@@ -116,9 +122,9 @@ let
 
   # Runtime flags for the C++ standard library
   cxxFlags = if useLLVMLibcxx then [
-    "-I" "${lib.getDev llvmPackages_13.libcxx}/include/c++/v1"
-    "-L" "${llvmPackages_13.libcxx}/lib"
-    "-l" "${llvmPackages_13.libcxx}/lib/libc++${stdenv.hostPlatform.extensions.sharedLibrary}"
+    "-I" "${lib.getDev llvmPackages_18.libcxx}/include/c++/v1"
+    "-L" "${llvmPackages_18.libcxx}/lib"
+    "-l" "${llvmPackages_18.libcxx}/lib/libc++${stdenv.hostPlatform.extensions.sharedLibrary}"
   ] else [
     "-I" "${gcc-unwrapped}/include/c++/${gcc-unwrapped.version}"
     "-I" "${gcc-unwrapped}/include/c++/${gcc-unwrapped.version}/${stdenv.hostPlatform.config}"
@@ -139,9 +145,10 @@ let
     "-nostdinc"
     "-nostdinc++"
 
-    "-resource-dir" "${llvmPackages_13.llvm.lib}/lib"
+    "-resource-dir" "${lib.getLib unwrapped}/lib/clang/18"
 
-    "-isystem" "${lib.getLib unwrapped}/lib/clang/${llvmPackages_13.clang.version}/include"
+    #"-isystem" "${lib.getLib unwrapped}/lib/clang/${llvmPackages_18.clang.version}/include"
+    "-isystem" "${lib.getLib unwrapped}/lib/clang/18/include"
   ]
   ++ cxxFlags
   ++ [
@@ -158,7 +165,7 @@ stdenv.mkDerivation {
   pname = "cling";
   version = unwrapped.version;
 
-  nativeBuildInputs = [ makeWrapper ];
+  nativeBuildInputs = [ makeWrapper  ];
   inherit unwrapped flags;
   inherit (unwrapped) meta;
 
